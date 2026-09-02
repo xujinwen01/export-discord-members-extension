@@ -2229,16 +2229,29 @@ async function runExport(
     // fast 模式 overall_timeout 直接收尾下载，不再进入 partial（保留 deep 的自动续跑，见上方 while 循环）
     if (!count && !task.stopRequested) throw Error("NO_MEMBERS_FOUND");
     console.log(1761)
-    if (task.options.fetchDetailedInfo && count && !task.stopRequested) {
+    // 收集阶段是否是被用户中断的（终止/结束并导出）。用于在详情阶段结束后仍以「停止」状态收尾。
+    let stoppedDuringCollect = false;
+    if (task.options.fetchDetailedInfo && count) {
       currentTask.phase = "details";
       currentTask.status = "fetching_profiles";
       currentTask.detailTotal = count;
       await saveTaskState(true);
+
+      // 收集阶段被用户中断时，之前会因 !task.stopRequested 直接跳过详情，导致只导出基础数据。
+      // 这里改为：只要开启“获取详细资料”且已收集到成员，就继续对已收集成员拉详情。
+      // 中断后原 signal 已被 abort 且 stopRequested 已置位，需清掉该标记并换一个全新的
+      // AbortController 接管，让详情阶段仍可被暂停/停止/结束并导出正常控制。
+      stoppedDuringCollect = task.stopRequested;
+      const enrichAbort = new AbortController();
+      if (stoppedDuringCollect) {
+        currentTask.stopRequested = false;
+        currentAbortController = enrichAbort;
+      }
       const kept = await enrichProfiles(taskId, {
         token: target.token,
         guildId: target.guildId,
         tierFilter: task.options.tierFilter,
-        signal: signal.signal,
+        signal: stoppedDuringCollect ? enrichAbort.signal : signal.signal,
         shouldPause: () => !!currentTask?.paused,
         shouldStop: () => !!currentTask?.stopRequested,
         onProgress: (done, total, kept) => {
@@ -2249,6 +2262,7 @@ async function runExport(
           saveTaskState();
         },
       });
+      if (stoppedDuringCollect) currentAbortController = null;
       if (!currentTask || currentTask.id !== taskId) return;
       currentTask.collected = kept;
       currentTask.detailTotal = kept;
@@ -2256,7 +2270,7 @@ async function runExport(
     console.log(1784)
     if (!currentTask || currentTask.id !== taskId) return;
     console.log(1785)
-    await finalizeTask(task.stopRequested ? "stopped" : "complete");
+    await finalizeTask(task.stopRequested || stoppedDuringCollect ? "stopped" : "complete");
   } catch (err) {
     console.log(17888, err)
     if (!currentTask || currentTask.id !== taskId) return;

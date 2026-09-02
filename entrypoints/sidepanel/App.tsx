@@ -461,8 +461,6 @@ function App() {
   const isPaused = task?.paused ?? false;
   const isPartial = task?.phase === 'partial';
   const canExport = !!(context?.guildId && context?.channelId && tokenReady);
-  // 开启详细资料但仍未进入 details（还在收集成员，enrichProfiles 尚未执行）：此时结束会缺少详细资料
-  const detailsPending = settings.fetchDetailedInfo && !safeInt(task?.detailTotal);
 
   // 当前频道对应的定时任务（有则回填时间并展示状态）
   const matchingSchedule =
@@ -782,14 +780,11 @@ function App() {
                 </button>
                 <button
                   className="primary finish"
-                  disabled={!task?.collected || detailsPending}
+                  disabled={!task?.collected}
                   onClick={finishExport}
                 >
                   <DownloadOutlined />
-                  { detailsPending
-                    ? (`收集成员 ${task?.collected?.toLocaleString() || 0} 人`)
-                    : (`结束并导出 ${task?.collected?.toLocaleString() || 0} 人`)
-                  }
+                  结束并导出 {task?.collected?.toLocaleString() || 0} 人
                 </button>
               </>
             ) : isPartial ? (
