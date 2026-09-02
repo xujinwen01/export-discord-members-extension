@@ -1,0 +1,6 @@
+allowBuilds:
+  core-js: false
+  dtrace-provider: false
+  esbuild: false
+  fsevents: false
+  spawn-sync: false
