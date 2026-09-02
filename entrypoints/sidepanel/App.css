@@ -42,6 +42,13 @@ select {
 button {
   cursor: pointer
 }
+button:focus,
+button:focus-visible,
+button:active {
+  outline: none !important;
+  box-shadow: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
 
 .app-shell {
   background: radial-gradient(circle at 12% -5%, #3de1d229, transparent 30%), radial-gradient(circle at 98% 2%, #5684ff29, transparent 32%), var(--bg);
@@ -316,12 +323,24 @@ button {
   margin-top: 9px;
   padding: 0 12px
 }
+.stack-field textarea {
+  border: 1px solid var(--line);
+  width: 100%;
+  color: var(--text);
+  background: #0e1628;
+  border-radius: 11px;
+  outline: none;
+  margin-top: 9px;
+  padding: 6px 12px;
+  font-size: 11px;
+}
 
 .number-input:focus,
 .stack-field input:focus,
+.stack-field textarea:focus
 .auth-stack input:focus {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px #37e7d11a
+  box-shadow: 0 0 0 3px #37e7d11a;
 }
 
 .chip-row {
@@ -479,7 +498,7 @@ button {
   background: 0 0;
   border: 0;
   padding: 0;
-  font-size: 10px
+  font-size: 10px;
 }
 
 .column-chips {
@@ -515,7 +534,6 @@ button {
   margin-top: 6px;
   font-size: 11px
 }
-
 .stack-field small {
   color: #7586a3;
   word-break: break-all;
@@ -917,7 +935,8 @@ button {
 :root[data-theme=light] .mode-grid button,
 :root[data-theme=light] .number-input,
 :root[data-theme=light] .select-row select,
-:root[data-theme=light] .stack-field input {
+:root[data-theme=light] .stack-field input,
+:root[data-theme=light] .stack-field textarea {
   color: #17223a;
   background: #f8fafc
 }
@@ -957,7 +976,8 @@ button {
   :root[data-theme=system] .mode-grid button,
   :root[data-theme=system] .number-input,
   :root[data-theme=system] .select-row select,
-  :root[data-theme=system] .stack-field input {
+  :root[data-theme=system] .stack-field input,
+  :root[data-theme=system] .stack-field textarea {
     color: #17223a;
     background: #f8fafc
   }
@@ -982,6 +1002,7 @@ button {
 }
 
 :root[data-theme=light] .chip-row button,
+:root[data-theme=light] .chip-row label,
 :root[data-theme=light] .column-chips button {
   color: #52627a;
   background: #eef3fa;
@@ -989,6 +1010,7 @@ button {
 }
 
 :root[data-theme=light] .chip-row button.active,
+:root[data-theme=light] .chip-row label.ant-radio-button-wrapper-checked,
 :root[data-theme=light] .column-chips button.active {
   color: #087f73;
   background: #dcfaf5;
@@ -1020,6 +1042,7 @@ button {
   }
 
   :root[data-theme=system] .chip-row button,
+  :root[data-theme=system] .chip-row label,
   :root[data-theme=system] .column-chips button {
     color: #52627a;
     background: #eef3fa;
@@ -1027,6 +1050,7 @@ button {
   }
 
   :root[data-theme=system] .chip-row button.active,
+  :root[data-theme=system] .chip-row label.ant-radio-button-wrapper-checked,
   :root[data-theme=system] .column-chips button.active {
     color: #087f73;
     background: #dcfaf5;

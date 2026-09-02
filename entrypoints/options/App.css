@@ -266,3 +266,241 @@
   font-size: 11px;
   text-align: center;
 }
+
+/* ---- 设置页：标签导航 ---- */
+.options-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #849cc629;
+  background: #0b1020a6;
+}
+
+.options-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  transition: all 0.18s;
+}
+
+.options-tabs button:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.options-tabs button.active {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.options-tabs button b {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #37e7d11f;
+  color: var(--primary);
+}
+
+/* ---- 设置页：卡片网格 ---- */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.settings-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.settings-card.wide {
+  grid-column: 1 / -1;
+}
+
+.card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  color: var(--primary);
+}
+
+.card-title div {
+  min-width: 0;
+}
+
+.card-title h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.card-title p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-card select,
+.settings-card input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.18s;
+}
+
+.settings-card select:focus,
+.settings-card input:focus {
+  border-color: var(--primary);
+}
+
+.inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inline select {
+  flex: 1 1 140px;
+}
+
+.folder-preview {
+  display: block;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.reset-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  color: #cbd8ed;
+  background: var(--surface-2);
+  border-radius: 9px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1;
+  transition: all 0.18s;
+}
+
+.reset-button:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+.access-card {
+  border-color: #ff6b7a38;
+}
+
+.danger-button {
+  width: max-content;
+  border: 1px solid #ff6b7a5e;
+  color: #ff9aa4;
+  background: #ff6b7a1f;
+  border-radius: 9px;
+  padding: 8px 14px;
+  font-size: 12px;
+  transition: all 0.18s;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #ff6b7a2e;
+  color: #ffb3ba;
+}
+
+.danger-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.status-banner.saved {
+  background: #45dda41f;
+  border-color: #45dda45e;
+  color: #8becc6;
+}
+
+/* ---- 浅色主题（跟随 sidepanel 的配色） ---- */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f7fb;
+  --surface: #fff;
+  --surface-2: #f7f9fd;
+  --surface-3: #eef3fa;
+  --line: #d9e2ef;
+  --text: #17223a;
+  --muted: #64748b;
+  color: #17223a;
+  background: #f4f7fb;
+}
+
+:root[data-theme='light'] .app-shell {
+  background: radial-gradient(circle at 12% -5%, #37e7d126, transparent 30%), #f4f7fb;
+}
+
+:root[data-theme='light'] .app-header,
+:root[data-theme='light'] .app-footer,
+:root[data-theme='light'] .options-tabs {
+  background: #ffffffe0;
+}
+
+:root[data-theme='light'] .settings-card select,
+:root[data-theme='light'] .settings-card input,
+:root[data-theme='light'] .reset-button {
+  color: #17223a;
+  background: #f8fafc;
+}
+
+:root[data-theme='light'] .settings-card select:focus,
+:root[data-theme='light'] .settings-card input:focus {
+  border-color: #62d9ca;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme='system'] {
+    color-scheme: light;
+    --bg: #f4f7fb;
+    --surface: #fff;
+    --surface-2: #f7f9fd;
+    --surface-3: #eef3fa;
+    --line: #d9e2ef;
+    --text: #17223a;
+    --muted: #64748b;
+  }
+
+  :root[data-theme='system'] .app-shell {
+    background: radial-gradient(circle at 12% -5%, #37e7d126, transparent 30%), #f4f7fb;
+  }
+
+  :root[data-theme='system'] .app-header,
+  :root[data-theme='system'] .app-footer,
+  :root[data-theme='system'] .options-tabs {
+    background: #ffffffe0;
+  }
+}

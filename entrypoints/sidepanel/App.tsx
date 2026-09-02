@@ -321,6 +321,18 @@ function App() {
     };
   }, []);
 
+  // 订阅 storage 变更：options 页（或别处）改了设置时，实时同步到 sidepanel
+  useEffect(() => {
+    const onStorageChanged = (changes: any, areaName: string) => {
+      if (areaName !== 'local' || !changes[KEY_SETTINGS]) return;
+      void loadSettings()
+        .then(setSettings)
+        .catch(() => void 0);
+    };
+    browser.storage.onChanged.addListener(onStorageChanged);
+    return () => browser.storage.onChanged.removeListener(onStorageChanged);
+  }, []);
+
   const runExport = async () => {
     if (starting) return;
     // 校验至少选中一列，避免导出空表格
@@ -543,10 +555,18 @@ function App() {
               <span>导出你有权访问的服务器成员</span>
             </div>
           </div>
-          {/* 暂时没做 */}
-          {/* <div className="header-actions">
-            <Button className="icon-button" icon={<SettingOutlined color="#fff" />}></Button>
-          </div> */}
+          <div className="header-actions">
+            <Button
+              className="icon-button"
+              title="设置"
+              icon={<SettingOutlined color="#fff" />}
+              onClick={() =>
+                void browser.tabs
+                  .create({ url: browser.runtime.getURL('/options.html#general') })
+                  .catch(() => void 0)
+              }
+            />
+          </div>
         </header>
         <section className="app-scroll">
           <section className={`context-strip ${tokenReady && context ? 'ready' : ''}`}>
@@ -682,7 +702,8 @@ function App() {
                 )}
                 <label className="stack-field">
                   <span>文件名模板</span>
-                  <input
+                  <textarea
+                    rows={3}
                     value={settings.filenameTemplate}
                     onChange={(e) => updateSettings('filenameTemplate', e.target.value)}
                   />
@@ -734,7 +755,11 @@ function App() {
               )}
               <button
                 className="link-action"
-                onClick={() => void browser.runtime.openOptionsPage().catch(() => void 0)}
+                onClick={() =>
+                  void browser.tabs
+                    .create({ url: browser.runtime.getURL('/options.html#schedules') })
+                    .catch(() => void 0)
+                }
               >
                 管理定时任务
               </button>
