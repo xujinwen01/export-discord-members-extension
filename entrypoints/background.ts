@@ -244,6 +244,8 @@ interface Task {
   error: string;
   startedAt: string;
   finishedAt: string | null;
+  /** 从 runExport 开始到当前的耗时，00h 00m 00s */
+  costTimes: string;
   context: PublicContext;
   source?: string;
   scheduleId?: string;
@@ -1774,7 +1776,7 @@ async function saveSchedules(schedules: Schedule[]): Promise<void> {
 const paymentClient = new PaymentClient({ productId: PRODUCT_ID, apiEndpoint: API_ENDPOINT, enableAliLog: true });
 const tabContextCache = new Map<number, MemberContext>();     // tabId → 上下文
 const SESSION_KEY_PREFIX = "dme:context:";                    // chrome.storage.session 键前缀
-const ACTIVE_PHASES = new Set<string>(["collecting", "details", "paused"]);
+const ACTIVE_PHASES = new Set<string>(["collecting", "details", "paused", "zipping"]);
 const targetCache = new Map<string, PublicContext>();         // "guildId:channelId" → 目标（带缓存时间）
 const guildCache = new Map<string, { serverName: string; avatar: string; memberCount: number; updatedAt: number }>();
 let currentTask: Task | null = null;
@@ -1782,14 +1784,26 @@ let currentAbortController: AbortController | null = null;
 let currentRunPromise: Promise<unknown> | null = null;
 let isRunning = false;
 let lastTaskSaveAt = 0;
+let runStartAt = 0; // runExport 开始时刻（毫秒时间戳），用于计算耗时 costTimes
 let initPromise: Promise<void> = Promise.resolve();
 let offscreenPromise: Promise<void> | null = null;
 let offscreenCloseTimer: ReturnType<typeof setTimeout> | null = null;
+let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
 /** 去掉任务的内部字段（stopRequested），用于持久化与广播 */
 function stripTaskInternal(task: Task): PublicTask {
   const { stopRequested, ...rest } = task;
   return rest;
+}
+
+/** 毫秒 → 00h 00m 00s */
+function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(h)}h ${p(m)}m ${p(s)}s`;
 }
 
 /** 节流保存任务状态并广播（180ms 内不重复写） */
@@ -1798,6 +1812,7 @@ async function saveTaskState(force = false): Promise<void> {
   const now = Date.now();
   if (!force && now - lastTaskSaveAt < 180) return;
   lastTaskSaveAt = now;
+  if (runStartAt) currentTask.costTimes = formatDuration(now - runStartAt);
   const snapshot = stripTaskInternal(currentTask);
   console.log(1374, snapshot)
   await saveTask(snapshot);
@@ -2018,6 +2033,16 @@ async function ensureOffscreen(): Promise<void> {
 
 /** 通过 offscreen 触发下载，然后记录统计 */
 async function downloadViaOffscreen(taskId: string, settings: Settings, language: string): Promise<any> {
+  const prevPhase = currentTask?.id === taskId ? currentTask.phase : undefined;
+  // 头像 ZIP 生成/下载耗时较长：进入 zipping 阶段并广播，让 UI 展示「头像ZIP生成中」并禁止再次导出，
+  // 否则任务已进入 complete/stopped 终态、UI 又允许点「导出成员」，会触发 ANOTHER_TASK_RUNNING。
+  if (prevPhase && settings.downloadAvatars) {
+    currentTask!.phase = "zipping";
+    currentTask!.status = "zipping_avatars";
+    await saveTaskState(true);
+  }
+  // offscreen 里 getAll + 生成大 CSV/XLSX 也要几十秒，期间同样保活，避免 SW 被误杀
+  startKeepAlive();
   try {
     await ensureOffscreen();
     const resp = await browser.runtime.sendMessage({
@@ -2032,6 +2057,11 @@ async function downloadViaOffscreen(taskId: string, settings: Settings, language
     browser.runtime.sendMessage({ type: "DME_STATS_UPDATED", stats }).catch(() => void 0);
     return output;
   } finally {
+    stopKeepAlive();
+    if (currentTask?.id === taskId && settings.downloadAvatars && prevPhase) {
+      currentTask.phase = prevPhase;
+      currentTask.status = "";
+    }
     await deleteResult(taskId).catch(() => void 0);
     offscreenCloseTimer = setTimeout(() => {
       browser.offscreen.closeDocument().catch(() => void 0);
@@ -2084,6 +2114,7 @@ async function startExport(params: StartExportParams): Promise<{ ok: true; task:
       error: "",
       startedAt,
       finishedAt: null,
+      costTimes: "00h 00m 00s",
       context: stripAuth(target),
       source: params.source,
       scheduleId: params.scheduleId,
@@ -2168,6 +2199,8 @@ async function runExport(
 ): Promise<void> {
   const task = currentTask;
   if (!task || task.id !== taskId) return;
+  runStartAt = Date.now();
+  task.costTimes = "00h 00m 00s";
   try {
     let count = task.collected;
     let reason = "";
@@ -2288,12 +2321,32 @@ async function runExport(
   }
 }
 
+/** MV3 的 service worker 有约 30s 的空闲超时，且只有「扩展 API 调用/事件」才算活动，
+ *  IndexedDB、fetch、纯 JS 计算都不计入。收尾 10w+ 条数据要跑几十秒到几分钟，
+ *  期间若不调用扩展 API 会被浏览器直接杀掉 → 重启后触发 markRestartedTask 报 BACKGROUND_RESTARTED。
+ *  这里用轻量 API 定期“打卡”重置空闲计时器，保证收尾/下载不被中途终止。 */
+function startKeepAlive(intervalMs = 20e3): void {
+  if (keepaliveTimer) return;
+  keepaliveTimer = setInterval(() => {
+    browser.runtime.getPlatformInfo().catch(() => void 0);
+  }, intervalMs);
+}
+
+function stopKeepAlive(): void {
+  if (keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
+}
+
 /** 收尾：从 member_stream 分批读成员 → 转行 → 写入 result_rows，标记完成 */
 async function finalizeTask(phase: string): Promise<void> {
   console.log('finalizeTask::', phase, currentTask)
   if (!currentTask) return;
   const taskId = currentTask.id;
 
+  startKeepAlive();
+  try {
   // 流式收尾：分批读成员 → 转行 → 写入 result_rows，避免全量成员驻留内存
   const ids = await readMemberIds(taskId);
   const avatars: Array<{ id: string; username: string; url: string }> = [];
@@ -2305,6 +2358,13 @@ async function finalizeTask(phase: string): Promise<void> {
     rowCount += rows.length;
     for (const m of members) {
       if (m.avatarUrl) avatars.push({ id: m.id, username: m.username, url: m.avatarUrl });
+    }
+    // 每批更新进度并顺带重置空闲计时器（storage.local.set + sendMessage 都是扩展 API）
+    if (currentTask && currentTask.id === taskId) {
+      currentTask.detailCurrent = rowCount;
+      currentTask.detailTotal = ids.length;
+      currentTask.status = "finalizing";
+      await saveTaskState(true);
     }
   }
 
@@ -2332,6 +2392,9 @@ async function finalizeTask(phase: string): Promise<void> {
   currentTask.finishedAt = new Date().toISOString();
   console.log(1827)
   await saveTaskState(true);
+  } finally {
+    stopKeepAlive();
+  }
 }
 
 /** service worker 重启后，把遗留的"进行中"任务标记为错误 */

@@ -1,14 +1,17 @@
 import {
   exportFiles,
-  type ExportResult,
+  type ExportMeta,
   type ExportSettings,
   type ExportOutput,
+  type RowBatchReader,
 } from "./export";
 
 const DB_NAME = "discord-member-exporter";
 const DB_STORE = "results";
 const ROWS_STORE = "result_rows";
 const ROW_INDEX_DIGITS = 8;
+/** 每次从 result_rows 读多少行（分页读，避免 getAll 把十万行一次全载入内存） */
+const ROW_READ_BATCH = 5000;
 
 function rowKey(taskId: string, index: number): string {
   return `${taskId}:${String(index).padStart(ROW_INDEX_DIGITS, "0")}`;
@@ -39,32 +42,54 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function getResult(taskId: string): Promise<ExportResult | null> {
+function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/** 读取导出元信息（不含 rows） */
+async function getResultMeta(taskId: string): Promise<ExportMeta | null> {
   const db = await openDb();
   try {
-    const meta = await new Promise<any | undefined>((resolve, reject) => {
-      const req = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).get(taskId);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
+    const meta = await requestToPromise<any>(
+      db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).get(taskId),
+    );
     if (!meta) return null;
-
-    const rows = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
-      const tx = db.transaction(ROWS_STORE, "readonly");
-      const range = IDBKeyRange.bound(rowKey(taskId, 0), rowKey(taskId, 10 ** ROW_INDEX_DIGITS - 1));
-      const req = tx.objectStore(ROWS_STORE).getAll(range);
-      req.onsuccess = () =>
-        resolve((req.result as Array<{ row: Record<string, unknown> }>).map((r) => r.row));
-      req.onerror = () => reject(req.error);
-    });
-
     return {
       taskId,
-      rows,
       avatars: meta.avatars ?? [],
       context: meta.context,
-      limitReached: meta.limitReached,
+      limitReached: !!meta.limitReached,
+      rowCount: Number(meta.rowCount || 0),
     };
+  } finally {
+    db.close();
+  }
+}
+
+/** 分批读取 result_rows：先取全部 key（仅字符串，体积小），再按 key 区间分页 getAll，逐批回调 */
+async function readRowsInBatches(
+  taskId: string,
+  batchSize: number,
+  onBatch: (rows: Record<string, unknown>[]) => Promise<void>,
+): Promise<void> {
+  const db = await openDb();
+  try {
+    const range = IDBKeyRange.bound(rowKey(taskId, 0), rowKey(taskId, 10 ** ROW_INDEX_DIGITS - 1));
+    const keys = await requestToPromise<IDBValidKey[]>(
+      db.transaction(ROWS_STORE, "readonly").objectStore(ROWS_STORE).getAllKeys(range),
+    );
+    for (let i = 0; i < keys.length; i += batchSize) {
+      const slice = keys.slice(i, i + batchSize);
+      if (!slice.length) break;
+      const sliceRange = IDBKeyRange.bound(slice[0]!, slice[slice.length - 1]!);
+      const records = await requestToPromise<Array<{ row: Record<string, unknown> }>>(
+        db.transaction(ROWS_STORE, "readonly").objectStore(ROWS_STORE).getAll(sliceRange),
+      );
+      await onBatch(records.map((r) => r.row));
+    }
   } finally {
     db.close();
   }
@@ -89,9 +114,10 @@ async function deleteResult(taskId: string): Promise<void> {
 async function handleDownload(message: DownloadMessage): Promise<DownloadResponse> {
   const taskId = String(message.taskId || "");
   try {
-    const result = await getResult(taskId);
-    if (!result?.rows?.length) throw new Error("NO_MEMBERS_FOUND");
-    const output = await exportFiles(result, message.settings);
+    const meta = await getResultMeta(taskId);
+    if (!meta || !meta.rowCount) throw new Error("NO_MEMBERS_FOUND");
+    const reader: RowBatchReader = (onBatch) => readRowsInBatches(taskId, ROW_READ_BATCH, onBatch);
+    const output = await exportFiles(meta, message.settings, reader);
     return { ok: true, output };
   } finally {
     await deleteResult(taskId).catch(() => void 0);

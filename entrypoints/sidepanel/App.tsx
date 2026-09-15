@@ -75,6 +75,7 @@ interface Task {
   resultCount: number;
   limitReached: boolean;
   error: string;
+  costTimes?: string;
   downloaded: boolean;
   filename: string;
   context?: { serverName?: string; channelName?: string; memberCount?: number };
@@ -181,6 +182,7 @@ function App() {
   const [tokenReady, setTokenReady] = useState(false);
   const [status, setStatus] = useState('');
   const [starting, setStarting] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [task, setTask] = useState<Task | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -294,7 +296,10 @@ function App() {
     const onMessage = (message: any) => {
       if (message?.type === 'DME_TASK_UPDATED') {
         setTask(message.task);
-        if (['complete', 'stopped', 'error'].includes(message.task?.phase)) setStatus('');
+        if (['complete', 'stopped', 'error'].includes(message.task?.phase)) {
+          setStatus('');
+          setFinishing(false);
+        }
       } else if (message?.type === 'DME_CONTEXT_UPDATED') {
         setTokenReady(!!message.tokenReady);
         setContext(message.context || null);
@@ -379,9 +384,11 @@ function App() {
 
   // 结束并导出当前已收集的成员（部分导出）
   const finishExport = () => {
+    if (!task?.collected || finishing) return;
+    setFinishing(true);
     browser.runtime
       .sendMessage({ type: 'DME_STOP', finishNow: true })
-      .catch(() => void 0);
+      .catch(() => setFinishing(false));
   };
 
   // 超时中断后「继续导出」：从断点续跑（复用上次任务 id 与已收集成员）
@@ -405,8 +412,8 @@ function App() {
 
   // 超时中断后「结束并导出」：把已收集的成员直接生成表格下载
   const finalizePartial = async () => {
-    if (!task || starting) return;
-    setStarting(true);
+    if (!task || finishing) return;
+    setFinishing(true);
     setStatus('');
     try {
       const resp = await browser.runtime.sendMessage({ type: 'DME_FINALIZE', taskId: task.id });
@@ -418,7 +425,7 @@ function App() {
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
     } finally {
-      setStarting(false);
+      setFinishing(false);
     }
   };
 
@@ -472,7 +479,9 @@ function App() {
   const isRunning = !!task && ACTIVE_PHASES.has(task.phase);
   const isPaused = task?.paused ?? false;
   const isPartial = task?.phase === 'partial';
+  const isZipping = task?.phase === 'zipping';
   const canExport = !!(context?.guildId && context?.channelId && tokenReady);
+  const costTimes = task?.costTimes || '00h 00m 00s';
 
   // 当前频道对应的定时任务（有则回填时间并展示状态）
   const matchingSchedule =
@@ -774,7 +783,7 @@ function App() {
           {task && task.phase !== 'idle' && <TaskCard task={task} />}
           {status && (
             <div className="error-banner">
-              <span>{status}</span>
+              <div>{status}</div>
               <button onClick={() => setStatus('')}>×</button>
             </div>
           )}
@@ -805,18 +814,23 @@ function App() {
                 </button>
                 <button
                   className="primary finish"
-                  disabled={!task?.collected}
+                  disabled={!task?.collected || finishing}
                   onClick={finishExport}
                 >
-                  <DownloadOutlined />
-                  结束并导出 {task?.collected?.toLocaleString() || 0} 人
+                  {finishing ? <LoadingOutlined /> : <DownloadOutlined />}
+                  {finishing ? '正在导出…' : `结束并导出 ${task?.collected?.toLocaleString() || 0} 人`}
                 </button>
               </>
+            ) : isZipping ? (
+              <button className="primary export" disabled>
+                <LoadingOutlined />
+                头像ZIP生成中…
+              </button>
             ) : isPartial ? (
               <>
                 <button
                   className="primary finish"
-                  disabled={starting}
+                  disabled={starting || finishing}
                   onClick={continueExport}
                 >
                   <ReloadOutlined />
@@ -824,11 +838,11 @@ function App() {
                 </button>
                 <button
                   className="secondary"
-                  disabled={starting}
+                  disabled={starting || finishing}
                   onClick={finalizePartial}
                 >
-                  <DownloadOutlined />
-                  结束并导出 {task?.collected?.toLocaleString() || 0} 人
+                  {finishing ? <LoadingOutlined /> : <DownloadOutlined />}
+                  {finishing ? '正在导出…' : `结束并导出 ${task?.collected?.toLocaleString() || 0} 人`}
                 </button>
               </>
             ) : (
@@ -842,6 +856,7 @@ function App() {
               </button>
             )}
           </div>
+          <div style={{marginTop: 10, fontSize: 10}}>本次导出一耗时：{ costTimes }</div>
           <div className="footer-meta">
             <span>版本 1.0.0</span>
             <span>成功导出次数：{stats.successfulExports}</span>
@@ -935,6 +950,9 @@ function taskStatusText(task: Task): string {
   if (task.phase === 'paused') {
     return `已暂停（已收集 ${task.collected} 人）`;
   }
+  if (task.phase === 'zipping') {
+    return '正在生成头像ZIP…';
+  }
   if (task.phase === 'error') {
     return '导出出错';
   }
@@ -954,9 +972,9 @@ function taskStatusText(task: Task): string {
   const fromStatus = statusToText(task.status);
   if (fromStatus) return fromStatus;
   if (task.totalMembers) {
-    return `正在收集成员 ${task.collected}/${task.totalMembers}`;
+    return `正在收集成员 ${task.collected.toLocaleString()}/${task.totalMembers.toLocaleString()}`;
   }
-  return `正在收集成员（${task.collected} 人）`;
+  return `正在收集成员（${task.collected.toLocaleString()} 人）`;
 }
 
 /** 把收集提前结束的原因映射成可读文案（正常完成/用户停止返回 null） */

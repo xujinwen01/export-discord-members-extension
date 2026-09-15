@@ -620,7 +620,7 @@ button:active {
   background: #ff6b7a17;
   border: 1px solid #ff6b7a52;
   border-radius: 12px;
-  grid-template-columns: 20px 1fr 20px;
+  grid-template-columns: auto auto auto; 
   align-items: center;
   gap: 8px;
   margin-top: 10px;
@@ -628,11 +628,10 @@ button:active {
   font-size: 11px;
   display: grid
 }
-
 .error-banner button {
   color: inherit;
   background: 0 0;
-  border: 0
+  border: 0;
 }
 
 .app-footer {

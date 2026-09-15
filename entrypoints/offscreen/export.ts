@@ -54,25 +54,26 @@ export interface ExportSettings {
   fetchDetailedInfo: boolean;
 }
 
-interface ExportAvatar {
+export interface ExportAvatar {
   id: string;
   username: string;
   url: string;
 }
 
-interface ExportContext {
+export interface ExportContext {
   serverName: string;
   guildId: string;
   channelName: string;
   channelId: string;
 }
 
-export interface ExportResult {
+/** 导出元信息（不含 rows，rows 由读取器按批流式提供） */
+export interface ExportMeta {
   taskId: string;
-  rows: Record<string, unknown>[];
   avatars: ExportAvatar[];
   context: ExportContext;
   limitReached: boolean;
+  rowCount: number;
 }
 
 export interface ExportOutput {
@@ -81,6 +82,9 @@ export interface ExportOutput {
   avatarFailures: number;
   avatarArchives: number;
 }
+
+/** 批量行读取器：逐批回调原始行（字段名 = toExportRow 的 key），避免一次把十万行全载入内存 */
+export type RowBatchReader = (onBatch: (rows: Record<string, unknown>[]) => Promise<void>) => Promise<void>;
 
 // ---- 工具函数 ----
 function escapeXml(value: unknown): string {
@@ -133,51 +137,89 @@ function joinPath(folder: string, filename: string): string {
   return clean ? `${clean}/${filename}` : filename;
 }
 
-// ---- 构造导出数据（表头 + 行）----
-function buildRows(result: ExportResult, settings: ExportSettings) {
-  const cols = [
+// ---- 列解析与行映射 ----
+function resolveColumns(settings: ExportSettings): ColumnDef[] {
+  return [
     ...BASIC_COLUMNS.filter((c) => settings.enabledBasicColumns.includes(c.key)),
     ...DETAILED_COLUMNS.filter(
       (c) => settings.fetchDetailedInfo && settings.enabledDetailedColumns.includes(c.key),
     ),
   ];
-  const headers = cols.map((c) => c.title);
-  const rows = result.rows.map((row) => {
-    const out: Record<string, unknown> = {};
-    cols.forEach((col, i) => {
-      const header = headers[i];
-      if (header !== undefined) out[header] = row[col.key] ?? "";
-    });
-    return out;
+}
+
+/** 原始行（字段名 = toExportRow 的 key）→ 表头键控对象 */
+function mapRow(raw: Record<string, unknown>, cols: ColumnDef[], headers: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (let i = 0; i < cols.length; i++) {
+    const header = headers[i];
+    if (header !== undefined) out[header] = raw[cols[i]!.key] ?? "";
+  }
+  return out;
+}
+
+// ---- CSV（分块拼接，避免一次拼出几十 MB 字符串）----
+function csvCell(value: unknown): string {
+  let s = String(value ?? "");
+  if (/^[\t\r\n]*[=+\-@]/.test(s)) s = `'${s}`;
+  return /[,"\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+}
+
+async function buildCsvStreaming(
+  headers: string[],
+  cols: ColumnDef[],
+  readRows: RowBatchReader,
+): Promise<Blob> {
+  const chunks: string[] = ["\uFEFF" + headers.join(",")];
+  await readRows(async (rows) => {
+    const lines = rows.map((raw) => headers.map((h) => csvCell(mapRow(raw, cols, headers)[h])).join(","));
+    if (lines.length) chunks.push(lines.join("\r\n"));
   });
-  return { headers, rows };
+  return new Blob([chunks.join("\r\n")], { type: "text/csv;charset=utf-8" });
 }
 
-// ---- 各格式生成 ----
-function buildCsv(headers: string[], rows: Record<string, unknown>[]): Blob {
-  const cell = (value: unknown): string => {
-    let s = String(value ?? "");
-    if (/^[\t\r\n]*[=+\-@]/.test(s)) s = `'${s}`;
-    return /[,"\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
-  };
-  const text =
-    "﻿" +
-    [headers.join(","), ...rows.map((row) => headers.map((h) => cell(row[h])).join(","))].join("\r\n");
-  return new Blob([text], { type: "text/csv;charset=utf-8" });
+// ---- JSON（分块拼接，保持与原 JSON.stringify(rows, null, 2) 相同格式）----
+async function buildJsonStreaming(
+  headers: string[],
+  cols: ColumnDef[],
+  readRows: RowBatchReader,
+): Promise<Blob> {
+  const parts: string[] = [];
+  await readRows(async (rows) => {
+    for (const raw of rows) {
+      const mapped = mapRow(raw, cols, headers);
+      parts.push(
+        JSON.stringify(mapped, null, 2)
+          .split("\n")
+          .map((line) => "  " + line)
+          .join("\n"),
+      );
+    }
+  });
+  return new Blob(["[\n" + parts.join(",\n") + "\n]"], { type: "application/json;charset=utf-8" });
 }
 
-function buildXls(headers: string[], rows: Record<string, unknown>[]): Blob {
-  const body = [headers, ...rows.map((row) => headers.map((h) => row[h] ?? ""))]
-    .map(
-      (line) =>
-        `<Row>${line
-          .map(
-            (v) =>
-              `<Cell><Data ss:Type="${typeof v === "number" ? "Number" : "String"}">${escapeXml(v)}</Data></Cell>`,
-          )
-          .join("")}</Row>`,
-    )
-    .join("");
+// ---- XLS（XML 表格，逐行拼块）----
+function xlsCell(value: unknown): string {
+  return `<Cell><Data ss:Type="${typeof value === "number" ? "Number" : "String"}">${escapeXml(value)}</Data></Cell>`;
+}
+
+function xlsRow(values: unknown[]): string {
+  return `<Row>${values.map(xlsCell).join("")}</Row>`;
+}
+
+async function buildXlsStreaming(
+  headers: string[],
+  cols: ColumnDef[],
+  readRows: RowBatchReader,
+): Promise<Blob> {
+  const chunks: string[] = [xlsRow(headers)];
+  await readRows(async (rows) => {
+    for (const raw of rows) {
+      const mapped = mapRow(raw, cols, headers);
+      chunks.push(xlsRow(headers.map((h) => mapped[h] ?? "")));
+    }
+  });
+  const body = chunks.join("");
   return new Blob(
     [
       `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="Members"><Table>${body}</Table></Worksheet></Workbook>`,
@@ -186,30 +228,42 @@ function buildXls(headers: string[], rows: Record<string, unknown>[]): Blob {
   );
 }
 
-async function buildXlsx(headers: string[], rows: Record<string, unknown>[]): Promise<Blob> {
+// ---- XLSX（sheet XML 逐行拼块，避免先物化整张表再 map）----
+function xlsxRow(row: Record<string, unknown>, headers: string[], r: number): string {
+  const cells = headers
+    .map((header, colIndex) => {
+      const value = row[header] ?? "";
+      const ref = `${colName(colIndex)}${r}`;
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return `<c r="${ref}"><v>${value}</v></c>`;
+      }
+      if (typeof value === "boolean") {
+        return `<c r="${ref}" t="b"><v>${+value}</v></c>`;
+      }
+      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`;
+    })
+    .join("");
+  return `<row r="${r}">${cells}</row>`;
+}
+
+async function buildXlsxStreaming(
+  headers: string[],
+  cols: ColumnDef[],
+  readRows: RowBatchReader,
+): Promise<Blob> {
   const zip = new JSZip();
   const headerRow: Record<string, unknown> = {};
   for (const h of headers) headerRow[h] = h;
-  const allRows = [headerRow, ...rows];
 
-  const sheetRows = allRows
-    .map((row, rowIndex) => {
-      const cells = headers
-        .map((header, colIndex) => {
-          const value = row[header] ?? "";
-          const ref = `${colName(colIndex)}${rowIndex + 1}`;
-          if (typeof value === "number" && Number.isFinite(value)) {
-            return `<c r="${ref}"><v>${value}</v></c>`;
-          }
-          if (typeof value === "boolean") {
-            return `<c r="${ref}" t="b"><v>${+value}</v></c>`;
-          }
-          return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`;
-        })
-        .join("");
-      return `<row r="${rowIndex + 1}">${cells}</row>`;
-    })
-    .join("");
+  const rowChunks: string[] = [xlsxRow(headerRow, headers, 1)];
+  let rowNum = 2; // 第 1 行是表头
+  await readRows(async (rows) => {
+    for (const raw of rows) {
+      rowChunks.push(xlsxRow(mapRow(raw, cols, headers), headers, rowNum));
+      rowNum++;
+    }
+  });
+  const sheetRows = rowChunks.join("");
 
   zip.file(
     "[Content_Types].xml",
@@ -231,7 +285,7 @@ async function buildXlsx(headers: string[], rows: Record<string, unknown>[]): Pr
     "xl/styles.xml",
     `<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/><family val="2"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
   );
-  const dimension = headers.length ? `${colName(headers.length - 1)}${allRows.length}` : "A1";
+  const dimension = headers.length ? `${colName(headers.length - 1)}${rowNum - 1}` : "A1";
   zip.file(
     "xl/worksheets/sheet1.xml",
     `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${dimension}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/><sheetData>${sheetRows}</sheetData></worksheet>`,
@@ -297,36 +351,40 @@ async function downloadBlob(blob: Blob, filename: string): Promise<number> {
 }
 
 // ---- 主导出 ----
-export async function exportFiles(result: ExportResult, settings: ExportSettings): Promise<ExportOutput> {
-  const { headers, rows } = buildRows(result, settings);
+export async function exportFiles(
+  meta: ExportMeta,
+  settings: ExportSettings,
+  readRows: RowBatchReader,
+): Promise<ExportOutput> {
+  const cols = resolveColumns(settings);
+  const headers = cols.map((c) => c.title);
   if (!headers.length) throw new Error("请至少选择一个导出字段。");
 
   const baseName =
     renderFilenameTemplate(settings.filenameTemplate, {
-      serverName: result.context.serverName,
-      serverId: result.context.guildId,
-      channelName: result.context.channelName,
-      channelId: result.context.channelId,
-      memberCount: result.rows.length,
+      serverName: meta.context.serverName,
+      serverId: meta.context.guildId,
+      channelName: meta.context.channelName,
+      channelId: meta.context.channelId,
+      memberCount: meta.rowCount,
     }) || `discord-members-${Date.now()}`;
 
   const format = settings.format;
   const filename = joinPath(settings.downloadFolder, `${baseName}.${format}`);
 
   let blob: Blob;
-  if (format === "csv") blob = buildCsv(headers, rows);
-  else if (format === "json")
-    blob = new Blob([JSON.stringify(rows, null, 2)], { type: "application/json;charset=utf-8" });
-  else if (format === "xls") blob = buildXls(headers, rows);
-  else blob = await buildXlsx(headers, rows);
+  if (format === "csv") blob = await buildCsvStreaming(headers, cols, readRows);
+  else if (format === "json") blob = await buildJsonStreaming(headers, cols, readRows);
+  else if (format === "xls") blob = await buildXlsStreaming(headers, cols, readRows);
+  else blob = await buildXlsxStreaming(headers, cols, readRows);
 
   await downloadBlob(blob, filename);
 
   let avatarFailures = 0;
   let avatarArchives = 0;
-  if (settings.downloadAvatars && result.avatars.length) {
-    const batches = Array.from({ length: Math.ceil(result.avatars.length / 500) }, (_, i) =>
-      result.avatars.slice(i * 500, (i + 1) * 500),
+  if (settings.downloadAvatars && meta.avatars.length) {
+    const batches = Array.from({ length: Math.ceil(meta.avatars.length / 500) }, (_, i) =>
+      meta.avatars.slice(i * 500, (i + 1) * 500),
     );
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i]!;
@@ -364,5 +422,5 @@ export async function exportFiles(result: ExportResult, settings: ExportSettings
     }
   }
 
-  return { filename, count: result.rows.length, avatarFailures, avatarArchives };
+  return { filename, count: meta.rowCount, avatarFailures, avatarArchives };
 }
