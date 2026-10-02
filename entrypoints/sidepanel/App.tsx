@@ -114,8 +114,10 @@ interface ColumnDef {
   label: string;
 }
 
+// 列定义必须与 offscreen/export.ts 的 BASIC_COLUMNS / DETAILED_COLUMNS 完全一致（key 一一对应），
+// 否则这里没列出的列用户无法勾选，或勾选后导不出对应数据。
 const BASIC_COLUMNS: ColumnDef[] = [
-  { key: 'avatarUrl', label: '头像 URL' },
+  { key: 'avatarUrl', label: '头像链接' },
   { key: 'id', label: '用户 ID' },
   { key: 'username', label: '用户名' },
   { key: 'nickname', label: '昵称' },
@@ -124,17 +126,31 @@ const BASIC_COLUMNS: ColumnDef[] = [
   { key: 'roles', label: '角色 ID' },
   { key: 'status', label: '状态' },
   { key: 'activity', label: '活动' },
+  { key: 'discriminator', label: '标识码' },
 ];
 
 const DETAILED_COLUMNS: ColumnDef[] = [
-  { key: 'globalName', label: '全局昵称' },
-  { key: 'nitroTier', label: 'Nitro 等级' },
+  { key: 'globalName', label: '全局名称' },
+  { key: 'nitroTier', label: 'Nitro 时长' },
   { key: 'nitroType', label: 'Nitro 类型' },
-  { key: 'nitroSince', label: 'Nitro 开通时间' },
-  { key: 'bio', label: '个人简介' },
-  { key: 'serverBoostSince', label: '服务器加速时间' },
+  { key: 'nitroSince', label: 'Nitro 起始时间' },
+  { key: 'bio', label: '简介' },
+  { key: 'pronouns', label: '代词' },
+  { key: 'serverBio', label: '服务器简介' },
+  { key: 'serverPronouns', label: '服务器代词' },
+  { key: 'serverBoostSince', label: '服务器加成起始时间' },
+  { key: 'accentColor', label: '主题色' },
+  { key: 'publicFlags', label: '公开标志' },
+  { key: 'primaryGuildTag', label: '主服务器标签' },
+  { key: 'clanTag', label: '社区标签' },
+  { key: 'avatarDecoration', label: '头像装饰' },
   { key: 'connectedAccounts', label: '关联账户' },
   { key: 'badges', label: '徽章' },
+  { key: 'mutualGuildsCount', label: '共同服务器' },
+  { key: 'mutualFriendsCount', label: '共同好友' },
+  { key: 'communicationDisabledUntil', label: '禁言截止时间' },
+  { key: 'pendingVerification', label: '待验证' },
+  { key: 'legacyUsername', label: '旧用户名' },
 ];
 
 /** Nitro 等级筛选选项（level 0 = 不限，1-8 对应 background NITRO_TIER_SKUS 的等级） */
